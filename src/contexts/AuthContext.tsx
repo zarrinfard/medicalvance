@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { User, Doctor, Patient, Admin, AuthContextType, UploadedDocument } from '../types';
+import { User, AuthContextType } from '../types';
+import apiService from '../services/api.js';
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -21,96 +22,102 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   useEffect(() => {
     // Check for existing session
-    const storedUser = localStorage.getItem('medicalvance_user');
-    if (storedUser) {
-      setUser(JSON.parse(storedUser));
+    const token = localStorage.getItem('medicalvance_token');
+    if (token) {
+      loadCurrentUser();
+    } else {
+      setIsLoading(false);
     }
-    setIsLoading(false);
   }, []);
+
+  const loadCurrentUser = async () => {
+    try {
+      const response = await apiService.getCurrentUser();
+      setUser(response.user);
+    } catch (error) {
+      console.error('Failed to load user:', error);
+      // Clear invalid token
+      apiService.logout();
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const login = async (email: string, password: string): Promise<boolean> => {
     setIsLoading(true);
     
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    const users = JSON.parse(localStorage.getItem('medicalvance_users') || '[]');
-    const foundUser = users.find((u: User) => u.email === email);
-    
-    if (foundUser) {
-      setUser(foundUser);
-      localStorage.setItem('medicalvance_user', JSON.stringify(foundUser));
+    try {
+      const response = await apiService.login(email, password);
+      setUser(response.user);
       setIsLoading(false);
       return true;
+    } catch (error) {
+      console.error('Login failed:', error);
+      setIsLoading(false);
+      return false;
     }
-    
-    setIsLoading(false);
-    return false;
   };
 
   const register = async (userData: any, role: 'doctor' | 'patient'): Promise<boolean> => {
     setIsLoading(true);
     
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    
-    const users = JSON.parse(localStorage.getItem('medicalvance_users') || '[]');
-    
-    // Check if email already exists
-    if (users.find((u: User) => u.email === userData.email)) {
+    try {
+      // Create FormData for file uploads
+      const formData = new FormData();
+      
+      // Add basic fields
+      formData.append('firstName', userData.firstName);
+      formData.append('lastName', userData.lastName);
+      formData.append('email', userData.email);
+      formData.append('password', userData.password);
+      formData.append('role', role);
+      
+      if (userData.phone) formData.append('phone', userData.phone);
+      
+      // Add role-specific fields
+      if (role === 'doctor') {
+        formData.append('specialty', userData.specialty);
+        formData.append('country', userData.country);
+        
+        // Add documents
+        if (userData.documents) {
+          userData.documents.forEach((doc: File) => {
+            formData.append('documents', doc);
+          });
+        }
+        
+        // Add profile image
+        if (userData.profileImage) {
+          formData.append('profileImage', userData.profileImage);
+        }
+      } else if (role === 'patient') {
+        if (userData.dateOfBirth) formData.append('dateOfBirth', userData.dateOfBirth);
+        if (userData.gender) formData.append('gender', userData.gender);
+      }
+      
+      const response = await apiService.register(formData);
+      setUser(response.user);
+      setIsLoading(false);
+      return true;
+    } catch (error) {
+      console.error('Registration failed:', error);
       setIsLoading(false);
       return false;
     }
-    
-    const newUser: User = {
-      id: Date.now().toString(),
-      email: userData.email,
-      firstName: userData.firstName,
-      lastName: userData.lastName,
-      role,
-      phone: userData.phone,
-      createdAt: new Date().toISOString(),
-      ...(role === 'doctor' && {
-        specialty: userData.specialty,
-        country: userData.country,
-        verificationStatus: 'pending' as const,
-        documents: userData.documents || [],
-        profileImage: userData.profileImage,
-      }),
-      ...(role === 'patient' && {
-        dateOfBirth: userData.dateOfBirth,
-        gender: userData.gender,
-      }),
-    };
-    
-    users.push(newUser);
-    localStorage.setItem('medicalvance_users', JSON.stringify(users));
-    
-    setUser(newUser);
-    localStorage.setItem('medicalvance_user', JSON.stringify(newUser));
-    
-    setIsLoading(false);
-    return true;
   };
 
   const logout = () => {
+    apiService.logout();
     setUser(null);
-    localStorage.removeItem('medicalvance_user');
   };
 
-  const updateProfile = (updates: Partial<User>) => {
-    if (!user) return;
-    
-    const updatedUser = { ...user, ...updates };
-    setUser(updatedUser);
-    localStorage.setItem('medicalvance_user', JSON.stringify(updatedUser));
-    
-    // Update in users array
-    const users = JSON.parse(localStorage.getItem('medicalvance_users') || '[]');
-    const userIndex = users.findIndex((u: User) => u.id === user.id);
-    if (userIndex !== -1) {
-      users[userIndex] = updatedUser;
-      localStorage.setItem('medicalvance_users', JSON.stringify(users));
+  const updateProfile = async (updates: Partial<User>) => {
+    try {
+      const response = await apiService.updateProfile(updates);
+      setUser(response.user);
+    } catch (error) {
+      console.error('Profile update failed:', error);
+      throw error;
     }
   };
 
@@ -125,71 +132,3 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
-
-// Initialize demo data
-const initializeDemoData = () => {
-  const existingUsers = localStorage.getItem('medicalvance_users');
-  if (!existingUsers) {
-    const demoUsers: User[] = [
-      {
-        id: 'admin-1',
-        email: 'admin@medicalvance.com',
-        firstName: 'Admin',
-        lastName: 'User',
-        role: 'admin',
-        createdAt: new Date().toISOString(),
-        permissions: ['manage_users', 'verify_doctors', 'view_analytics'],
-      } as Admin,
-      {
-        id: 'doctor-1',
-        email: 'dr.smith@example.com',
-        firstName: 'John',
-        lastName: 'Smith',
-        role: 'doctor',
-        specialty: 'Cardiology',
-        country: 'United States',
-        verificationStatus: 'verified',
-        documents: [],
-        createdAt: new Date(Date.now() - 86400000).toISOString(),
-        phone: '+1-555-0123',
-      } as Doctor,
-      {
-        id: 'doctor-2',
-        email: 'dr.patel@example.com',
-        firstName: 'Priya',
-        lastName: 'Patel',
-        role: 'doctor',
-        specialty: 'Neurology',
-        country: 'United Kingdom',
-        verificationStatus: 'pending',
-        documents: [
-          {
-            id: 'doc-1',
-            name: 'medical_license.pdf',
-            type: 'application/pdf',
-            url: '#',
-            uploadedAt: new Date().toISOString(),
-          },
-        ],
-        createdAt: new Date(Date.now() - 172800000).toISOString(),
-        phone: '+44-20-7946-0958',
-      } as Doctor,
-      {
-        id: 'patient-1',
-        email: 'patient@example.com',
-        firstName: 'Jane',
-        lastName: 'Doe',
-        role: 'patient',
-        dateOfBirth: '1985-03-15',
-        gender: 'female',
-        createdAt: new Date(Date.now() - 259200000).toISOString(),
-        phone: '+1-555-0456',
-      } as Patient,
-    ];
-    
-    localStorage.setItem('medicalvance_users', JSON.stringify(demoUsers));
-  }
-};
-
-// Initialize demo data when the module loads
-initializeDemoData();
